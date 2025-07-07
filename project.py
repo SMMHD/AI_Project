@@ -839,6 +839,12 @@ GRADING CRITERIA:
 - Code quality and documentation (20%)
 - Experimental analysis (25%)
 - Written report and insights (15%)
+- Written report and insights (15%)
+- Written report and insights (15%)
+- Written report and insights (15%)
+- Written report and insights (15%)
+- Written report and insights (15%)
+- Written report and insights (15%)
 
 Good luck with your implementation!
 """
