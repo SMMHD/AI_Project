@@ -295,22 +295,27 @@ class SimpleReflexAgent(Agent):
         self.rule_activations = defaultdict(int)
 
     def decide_action(self, perception: Perception) -> Tuple[Action, str]:
-        """منطق تصمیم‌گیری بر اساس قوانین شرط-عمل با اولویت."""
-
         my_pos = perception.position
         visible_cells = perception.visible_cells
 
-        # قانون ۱: اگر روی منبع هستیم و چیزی حمل نمی‌کنیم، آن را برداریم
-        if visible_cells.get(my_pos) == CellType.RESOURCE and not perception.has_resource:
-            self.rule_activations['pickup_resource'] += 1
-            return Action.PICKUP, "Rule 1: On a resource, picking up."
+        # 1. اولویت ۱: اجتناب از خطر
+        if visible_cells.get(my_pos) == CellType.HAZARD:
+            self.rule_activations['hazard_avoidance'] += 1
+            # یک حرکت به سمت سلول امن پیدا کن
+            action = self._find_first_safe_move(visible_cells, my_pos)
+            return action, "Rule 1: Fleeing from a hazard."
 
-        # قانون ۱.۵: اگر منبع داریم و روی هدف هستیم، آن را رها کن
+        # 2. اولویت ۲: جمع‌آوری منبع  (با اصلاحیه شما)
+        if not perception.has_resource and visible_cells.get(my_pos) == CellType.RESOURCE:
+            self.rule_activations['pickup_resource'] += 1
+            return Action.PICKUP, "Rule 2: On a resource, picking up."
+
+        # (این یک قانون مفید است که شما اضافه کردید و می‌توان آن را نگه داشت)
         if perception.has_resource and visible_cells.get(my_pos) == CellType.GOAL:
             self.rule_activations['drop_on_goal'] += 1
-            return Action.DROP, "Rule 1.5: On goal with resource, dropping."
+            return Action.DROP, "Rule 2.5: On goal with resource, dropping."
 
-        # قانون ۲: اگر منبعی حمل می‌کنیم و هدف را می‌بینیم، به سمت آن حرکت کنیم
+        # 3. اولویت ۳: حرکت به سمت هدف [cite: 66]
         if perception.has_resource:
             goal_positions = [pos for pos, cell_type in visible_cells.items() if cell_type == CellType.GOAL]
             if goal_positions:
@@ -318,9 +323,9 @@ class SimpleReflexAgent(Agent):
                 if direction:
                     action = self._direction_to_action(direction)
                     self.rule_activations['move_to_goal'] += 1
-                    return action, f"Rule 2: Carrying resource, moving toward goal at {goal_positions[0]}"
+                    return action, f"Rule 3: Carrying resource, moving toward goal."
 
-        # قانون ۳: اگر منبعی حمل نمی‌کنیم و منبعی می‌بینیم، به سمت آن حرکت کنیم
+        # 4. اولویت ۴: حرکت به سمت منبع [cite: 67]
         if not perception.has_resource:
             resource_positions = [pos for pos, cell_type in visible_cells.items() if cell_type == CellType.RESOURCE]
             if resource_positions:
@@ -328,12 +333,21 @@ class SimpleReflexAgent(Agent):
                 if direction:
                     action = self._direction_to_action(direction)
                     self.rule_activations['move_to_resource'] += 1
-                    return action, f"Rule 3: Seeking resource, moving toward {resource_positions[0]}"
+                    return action, f"Rule 4: Seeking resource, moving toward it."
 
-        # قانون ۴: حرکت اکتشافی تصادفی
-        action = self._random_valid_move(visible_cells, my_pos)
+        # 5. اولویت ۵: کاوش تصادفی [cite: 68]
         self.rule_activations['random_explore'] += 1
-        return action, "Rule 4: Random exploration."
+        action = self._random_valid_move(visible_cells, my_pos)
+        return action, "Rule 5: Random exploration."
+
+    # شما باید متد کمکی _find_first_safe_move را اضافه کنید:
+    def _find_first_safe_move(self, visible_cells: Dict[Position, CellType], current_pos: Position) -> Action:
+        """یک حرکت به سمت اولین خانه امن (نه دیوار و نه خطر) پیدا می‌کند."""
+        for direction in random.sample(list(Direction), len(Direction)):
+            next_pos = current_pos + direction
+            if visible_cells.get(next_pos) not in [CellType.WALL, CellType.HAZARD]:
+                return self._direction_to_action(direction)
+        return Action.WAIT  # اگر هیچ حرکت امنی نبود
 
     def _direction_to_action(self, direction: Direction) -> Action:
         """تبدیل جهت به اقدام حرکتی."""
@@ -505,10 +519,9 @@ class PlanStep:
     """Represents a single step in an agent's plan"""
     action: Action
     # این فیلدها در آینده برای برنامه‌های پیچیده‌تر مفید خواهند بود
-    # target_position: Position
-    # purpose: str
-    # estimated_cost: float = 1.0
-
+    target_position: Position
+    purpose: str
+    estimated_cost: float = 1.0
 
 class GoalBasedAgent(Agent):
     """
@@ -548,50 +561,138 @@ class GoalBasedAgent(Agent):
                 self.known_resources.remove(res_pos)
 
     def decide_action(self, perception: Perception) -> Tuple[Action, str]:
-        """منطق اصلی: به‌روزرسانی حافظه، سپس اجرای برنامه یا ساخت برنامه جدید."""
+        """
+        منطق اصلی تصمیم‌گیری عامل هدف‌گرا: اجرای برنامه فعلی یا ساختن یک برنامه جدید.
+        """
         self._update_world_model(perception)
 
-        # اگر برنامه‌ای در حال اجراست و هنوز معتبر است، آن را ادامه بده
+        # ۱. قبل از اجرای هر مرحله، اعتبار کل برنامه را بررسی کن
+        # این کار از دنبال کردن اهداف نامعتبر (مثلاً منبعی که توسط دیگری برداشته شده) جلوگیری می‌کند
+        if self.current_plan and not self._is_plan_valid(perception):
+            print(f"Agent {self.agent_id}: Plan is no longer valid. Replanning...")
+            self.current_plan = []  # پاک کردن برنامه نامعتبر تا یک برنامه جدید ساخته شود
+
+        # ۲. اگر برنامه‌ای وجود ندارد، یک برنامه جدید بساز
+        if not self.current_plan:
+            # این متد بهترین هدف را انتخاب کرده و current_plan را پر می‌کند
+            self._create_new_plan(perception)
+
+        # ۳. برنامه را اجرا کن یا به حالت بازگشتی عمل کن
         if self.current_plan:
+            # اولین گام از برنامه را بردار و از لیست حذف کن
             next_step = self.current_plan.pop(0)
-            reason = f"Executing plan: {next_step.action.name}"
+            reason = f"Executing plan: {next_step.action.name} towards {next_step.target_position}"
             return next_step.action, reason
+        else:
+            # اگر پس از تلاش، هیچ برنامه‌ای ساخته نشد (مثلاً هیچ هدف قابل دستیابی نبود)
+            # به یک رفتار واکنشی ساده (کاوش هوشمند) بازگرد
+            action = self._intelligent_exploration(perception.position, perception.visible_cells)
+            return action, "No plan available. Falling back to exploration."
 
-        # اگر برنامه‌ای وجود ندارد، یک برنامه جدید بساز
-        self._create_new_plan(perception)
+    def _is_plan_valid(self, perception: Perception) -> bool:
+        """
+        بررسی می‌کند که آیا برنامه فعلی با توجه به اطلاعات جدید هنوز قابل اجراست یا خیر.
+        """
+        if not self.current_plan:
+            return True  # برنامه‌ای وجود ندارد که نامعتبر باشد
 
-        # اگر بعد از تلاش، برنامه‌ای ساخته شد، اولین قدم آن را اجرا کن
-        if self.current_plan:
-            next_step = self.current_plan.pop(0)
-            reason = f"Starting new plan: {next_step.action.name}"
-            return next_step.action, reason
+        # بررسی شرط ۱: آیا مسیر فوری مسدود شده است؟
+        # اولین گام برنامه معمولاً یک حرکت است. بررسی می‌کنیم مقصد آن به دیوار تبدیل نشده باشد.
+        next_step = self.current_plan[0]
+        if next_step.action.name.startswith("MOVE"):
+            if next_step.target_position in self.known_walls:
+                print(f"Agent {self.agent_id}: Path blocked at {next_step.target_position}. Plan invalid.")
+                return False  # مسیر فوری مسدود است
 
-        # اگر هیچ برنامه‌ای ممکن نبود، یک حرکت اکتشافی انجام بده
-        action = self._intelligent_exploration(perception.position, perception.visible_cells)
-        return action, "No current goal. Exploring intelligently."
+        # بررسی شرط ۲: آیا هدف نهایی برنامه هنوز معتبر است؟
+        # این مهم‌ترین بخش برای اهداف وابسته به وضعیت محیط است.
+        last_step = self.current_plan[-1]
+
+        # اگر هدف نهایی برداشتن یک منبع است...
+        if last_step.action == Action.PICKUP:
+            # ...بررسی کن که آیا آن منبع هنوز در حافظه ما به عنوان یک منبع شناخته شده وجود دارد یا خیر.
+            resource_pos = last_step.target_position
+            if resource_pos not in self.known_resources:
+                print(f"Agent {self.agent_id}: Target resource at {resource_pos} is gone. Plan invalid.")
+                return False  # منبع دیگر وجود ندارد
+
+        # اگر برنامه برای رساندن منبع به هدف باشد (DROP)، معمولاً همیشه معتبر است
+        # چون مکان‌های هدف (Goal) از بین نمی‌روند.
+
+        return True  # اگر هیچکدام از شرایط نقض نشده باشد، برنامه معتبر است
+
+    # def decide_action(self, perception: Perception) -> Tuple[Action, str]:
+    #     """منطق اصلی: به‌روزرسانی حافظه، سپس اجرای برنامه یا ساخت برنامه جدید."""
+    #     self._update_world_model(perception)
+    #
+    #     # اگر برنامه‌ای در حال اجراست و هنوز معتبر است، آن را ادامه بده
+    #     if self.current_plan:
+    #         next_step = self.current_plan.pop(0)
+    #         reason = f"Executing plan: {next_step.action.name}"
+    #         return next_step.action, reason
+    #
+    #     # اگر برنامه‌ای وجود ندارد، یک برنامه جدید بساز
+    #     self._create_new_plan(perception)
+    #
+    #     # اگر بعد از تلاش، برنامه‌ای ساخته شد، اولین قدم آن را اجرا کن
+    #     if self.current_plan:
+    #         next_step = self.current_plan.pop(0)
+    #         reason = f"Starting new plan: {next_step.action.name}"
+    #         return next_step.action, reason
+    #
+    #     # اگر هیچ برنامه‌ای ممکن نبود، یک حرکت اکتشافی انجام بده
+    #     action = self._intelligent_exploration(perception.position, perception.visible_cells)
+    #     return action, "No current goal. Exploring intelligently."
 
     def _create_new_plan(self, perception: Perception):
-        """بر اساس حافظه، بهترین هدف را انتخاب و برایش برنامه‌ریزی می‌کند."""
+        """
+        بر اساس حافظه و مطلوبیت، بهترین هدف را انتخاب و برایش برنامه‌ریزی می‌کند.
+        این نسخه شامل تمام انواع اهداف (خطر، تحویل، جمع‌آوری، کاوش) است.
+        """
         my_pos = perception.position
-
         candidate_goals = []
+
+        # اولویت ۱: اجتناب از خطر (بالاترین مطلوبیت)
+        # [cite_start]طبق مستندات، مطلوبیت پایه برای اجتناب از خطر 50.0 است[cite: 134].
+        if perception.visible_cells.get(my_pos) == CellType.HAZARD:
+            # یک برنامه اضطراری برای فرار به نزدیک‌ترین خانه امن ایجاد کن
+            safe_move = self._intelligent_exploration(my_pos, perception.visible_cells)
+            if safe_move != Action.WAIT:
+                direction = Direction[safe_move.name.replace("MOVE_", "")]
+                target = my_pos + direction
+                self.current_plan = [PlanStep(action=safe_move, target_position=target, purpose="Flee from hazard")]
+                print(f"Agent {self.agent_id} created an emergency plan: Flee hazard!")
+                return
+
+        # اولویت ۲: تحویل منبع
+        # [cite_start]اگر منبعی حمل می‌کنیم، به دنبال تحویل آن به یک هدف باشید[cite: 132].
         if perception.has_resource:
             for pos in self.known_goals:
                 candidate_goals.append({"type": "DELIVER", "pos": pos, "base_utility": 20.0})
         else:
-            # اگر روی منبع هستیم، برنامه فقط برداشتن است
+            # [cite_start]اولویت ۳: جمع‌آوری منبع [cite: 131]
+            # اگر روی منبع هستیم، برنامه فقط برداشتن است.
             if perception.visible_cells.get(my_pos) == CellType.RESOURCE:
-                self.current_plan = [PlanStep(action=Action.PICKUP)]
+                self.current_plan = [PlanStep(action=Action.PICKUP, target_position=my_pos, purpose="Perform COLLECT")]
+                print(f"Agent {self.agent_id} created a plan: On-site PICKUP")
                 return
-
+            # در غیر این صورت، اهداف جمع‌آوری را از حافظه اضافه کن.
             for pos in self.known_resources:
                 candidate_goals.append({"type": "COLLECT", "pos": pos, "base_utility": 10.0})
 
+        # [cite_start]اولویت ۴: کاوش [cite: 133]
+        # اگر هیچ هدف دیگری در دسترس نیست، به دنبال کاوش باشید.
+        if not candidate_goals:
+            explore_target = self._find_nearest_unvisited_target(my_pos)
+            if explore_target:
+                candidate_goals.append({"type": "EXPLORE", "pos": explore_target, "base_utility": 1.0})
+
+        # اگر در نهایت هیچ هدفی وجود نداشت، بازگرد
         if not candidate_goals:
             self.current_plan = []
             return
 
-        # محاسبه مطلوبیت و انتخاب بهترین هدف
+        # [cite_start]محاسبه مطلوبیت نهایی با در نظر گرفتن فاصله [cite: 135]
         for goal in candidate_goals:
             dist = abs(my_pos.x - goal["pos"].x) + abs(my_pos.y - goal["pos"].y)
             goal['utility'] = goal["base_utility"] / (dist + 1)
@@ -602,10 +703,82 @@ class GoalBasedAgent(Agent):
         path_actions = self._find_path_astar(my_pos, best_goal["pos"], self.known_walls)
 
         if path_actions:
-            self.current_plan = [PlanStep(action=act) for act in path_actions]
-            final_action = Action.PICKUP if best_goal["type"] == "COLLECT" else Action.DROP
-            self.current_plan.append(PlanStep(action=final_action))
+            self.current_plan = []
+            current_pos_in_plan = my_pos
+
+            # حلقه اصلی برای ساخت گام‌های برنامه با target_position
+            for act in path_actions:
+                direction = Direction[act.name.replace("MOVE_", "")]
+                next_pos_in_plan = current_pos_in_plan + direction
+                step = PlanStep(action=act, target_position=next_pos_in_plan,
+                                purpose=f"Move to {best_goal['type']} goal")
+                self.current_plan.append(step)
+                current_pos_in_plan = next_pos_in_plan
+
+            # اضافه کردن گام نهایی (برداشتن، گذاشتن یا رسیدن به نقطه کاوش)
+            if best_goal["type"] in ["COLLECT", "DELIVER"]:
+                final_action = Action.PICKUP if best_goal["type"] == "COLLECT" else Action.DROP
+                final_step = PlanStep(action=final_action, target_position=best_goal["pos"],
+                                      purpose=f"Perform {best_goal['type']}")
+                self.current_plan.append(final_step)
+
             print(f"Agent {self.agent_id} created a new plan: {best_goal['type']} at {best_goal['pos']}")
+
+    def _find_nearest_unvisited_target(self, my_pos: Position) -> Optional[Position]:
+        """نزدیک‌ترین خانه دیده‌نشده مجاور خانه‌های دیده‌شده را پیدا می‌کند."""
+        frontier = deque([my_pos])
+        searched = {my_pos}
+
+        while frontier:
+            pos = frontier.popleft()
+            for direction in Direction:
+                next_pos = pos + direction
+                if next_pos not in searched:
+                    searched.add(next_pos)
+                    # اگر این خانه دیده نشده ولی والد آن دیده شده، هدف خوبی است
+                    if next_pos not in self.visited_positions and pos in self.visited_positions:
+                        return next_pos
+                    # اگر دیوار نیست، به جستجو ادامه بده
+                    if next_pos not in self.known_walls:
+                        frontier.append(next_pos)
+        return None
+
+    # def _create_new_plan(self, perception: Perception):
+    #     """بر اساس حافظه، بهترین هدف را انتخاب و برایش برنامه‌ریزی می‌کند."""
+    #     my_pos = perception.position
+    #
+    #     candidate_goals = []
+    #     if perception.has_resource:
+    #         for pos in self.known_goals:
+    #             candidate_goals.append({"type": "DELIVER", "pos": pos, "base_utility": 20.0})
+    #     else:
+    #         # اگر روی منبع هستیم، برنامه فقط برداشتن است
+    #         if perception.visible_cells.get(my_pos) == CellType.RESOURCE:
+    #             self.current_plan = [PlanStep(action=Action.PICKUP)]
+    #             return
+    #
+    #         for pos in self.known_resources:
+    #             candidate_goals.append({"type": "COLLECT", "pos": pos, "base_utility": 10.0})
+    #
+    #     if not candidate_goals:
+    #         self.current_plan = []
+    #         return
+    #
+    #     # محاسبه مطلوبیت و انتخاب بهترین هدف
+    #     for goal in candidate_goals:
+    #         dist = abs(my_pos.x - goal["pos"].x) + abs(my_pos.y - goal["pos"].y)
+    #         goal['utility'] = goal["base_utility"] / (dist + 1)
+    #
+    #     best_goal = max(candidate_goals, key=lambda g: g['utility'])
+    #
+    #     # ساختن مسیر با A*
+    #     path_actions = self._find_path_astar(my_pos, best_goal["pos"], self.known_walls)
+    #
+    #     if path_actions:
+    #         self.current_plan = [PlanStep(action=act) for act in path_actions]
+    #         final_action = Action.PICKUP if best_goal["type"] == "COLLECT" else Action.DROP
+    #         self.current_plan.append(PlanStep(action=final_action))
+    #         print(f"Agent {self.agent_id} created a new plan: {best_goal['type']} at {best_goal['pos']}")
 
     def _find_path_astar(self, start: Position, goal: Position, walls: Set[Position]) -> List[Action]:
         # ... (این کد دقیقاً همان کد A* است که قبلاً داشتیم) ...
@@ -654,6 +827,7 @@ class GoalBasedAgent(Agent):
                 return self._direction_to_action(direction)
         valid_directions = [d for d in Direction if visible_cells.get(current_pos + d) != CellType.WALL]
         return self._direction_to_action(random.choice(valid_directions)) if valid_directions else Action.WAIT
+
 
 
 # ============================================================================
