@@ -32,6 +32,7 @@ from enum import Enum
 from dataclasses import dataclass, field, asdict
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
+import csv
 import heapq
 import random
 import time
@@ -780,39 +781,119 @@ class GoalBasedAgent(Agent):
     #         self.current_plan.append(PlanStep(action=final_action))
     #         print(f"Agent {self.agent_id} created a new plan: {best_goal['type']} at {best_goal['pos']}")
 
+    # این متد را در کلاس GoalBasedAgent کپی و جایگزین کنید
+
     def _find_path_astar(self, start: Position, goal: Position, walls: Set[Position]) -> List[Action]:
-        # ... (این کد دقیقاً همان کد A* است که قبلاً داشتیم) ...
+        """
+        الگوریتم A* برای پیدا کردن کوتاه‌ترین مسیر با یک مکانیسم ایمنی برای جلوگیری از حلقه بی‌نهایت.
+        """
+
+        # تابع هیوریستیک (فاصله منهتن)
         def heuristic(a: Position, b: Position) -> int:
             return abs(a.x - b.x) + abs(a.y - b.y)
 
-        frontier = [(0, start)]
+        # داده‌ساختارهای مورد نیاز A*
+        frontier = [(0, start)]  # صف اولویت (هزینه, موقعیت)
         heapq.heapify(frontier)
-        came_from = {start: None}
-        cost_so_far = {start: 0}
-        while frontier:
-            _, current_pos = heapq.heappop(frontier)
-            if current_pos == goal: break
+        came_from = {start: None}  # دیکشنری برای بازسازی مسیر
+        cost_so_far = {start: 0}  # دیکشنری برای هزینه‌های مسیر
 
+        # --- بخش اضافه شده برای کنترل حلقه بی‌نهایت ---
+        iteration_limit = 200  # حداکثر تعداد تکرار مجاز (برای یک نقشه 12x12 هم کافی است)
+        iteration_count = 0
+        # ------------------------------------------------
+
+        while frontier:
+            # --- کنترل تکرارها ---
+            iteration_count += 1
+            if iteration_count > iteration_limit:
+                print(f"!!! A* Pathfinding Warning: Exceeded iteration limit from {start} to {goal}. Aborting.")
+                return []  # مسیر پیدا نشد، یک لیست خالی برگردان
+            # ---------------------
+
+            _, current_pos = heapq.heappop(frontier)
+
+            if current_pos == goal:
+                break  # اگر به هدف رسیدیم، حلقه تمام می‌شود
+
+            # بررسی همسایه‌ها
             for direction in Direction:
                 action = self._direction_to_action(direction)
                 next_pos = current_pos + direction
-                if next_pos in walls: continue
-                new_cost = cost_so_far[current_pos] + 1
+
+                # اگر همسایه دیوار بود، آن را نادیده بگیر
+                if next_pos in walls:
+                    continue
+
+                new_cost = cost_so_far[current_pos] + 1  # هزینه هر حرکت ۱ است
+
                 if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
                     cost_so_far[next_pos] = new_cost
                     priority = new_cost + heuristic(next_pos, goal)
                     heapq.heappush(frontier, (priority, next_pos))
                     came_from[next_pos] = (current_pos, action)
 
-        if goal not in came_from: return []
+        # اگر مسیری به هدف پیدا نشد
+        if goal not in came_from:
+            return []
+
+        # بازسازی مسیر از انتها به ابتدا
         path = []
         temp = goal
         while temp != start:
             prev_pos, action = came_from[temp]
             path.append(action)
             temp = prev_pos
-        path.reverse()
+        path.reverse()  # مسیر را برعکس کن تا از ابتدا به انتها شود
+
         return path
+
+
+
+
+
+    # این درست بوده و الان داریم این رو تست میکنم.
+
+
+
+    # def _find_path_astar(self, start: Position, goal: Position, walls: Set[Position]) -> List[Action]:
+    #     # ... (این کد دقیقاً همان کد A* است که قبلاً داشتیم) ...
+    #     print(f"  [A*] Finding path from {start} to {goal}")  # <-- این خط را اضافه کنید
+    #
+    #     def heuristic(a: Position, b: Position) -> int:
+    #         return abs(a.x - b.x) + abs(a.y - b.y)
+    #
+    #     frontier = [(0, start)]
+    #     heapq.heapify(frontier)
+    #     came_from = {start: None}
+    #     cost_so_far = {start: 0}
+    #
+    #     iteration_count = 0  # <-- این خط را اضافه کنید
+    #
+    #     while frontier:
+    #         _, current_pos = heapq.heappop(frontier)
+    #         if current_pos == goal: break
+    #
+    #         for direction in Direction:
+    #             action = self._direction_to_action(direction)
+    #             next_pos = current_pos + direction
+    #             if next_pos in walls: continue
+    #             new_cost = cost_so_far[current_pos] + 1
+    #             if next_pos not in cost_so_far or new_cost < cost_so_far[next_pos]:
+    #                 cost_so_far[next_pos] = new_cost
+    #                 priority = new_cost + heuristic(next_pos, goal)
+    #                 heapq.heappush(frontier, (priority, next_pos))
+    #                 came_from[next_pos] = (current_pos, action)
+    #
+    #     if goal not in came_from: return []
+    #     path = []
+    #     temp = goal
+    #     while temp != start:
+    #         prev_pos, action = came_from[temp]
+    #         path.append(action)
+    #         temp = prev_pos
+    #     path.reverse()
+    #     return path
 
     # --- متدهای کمکی مشترک ---
     def _direction_to_action(self, direction: Direction) -> Action:
@@ -949,18 +1030,65 @@ class ProjectTester:
 
         return final_metrics
 
+    # در کلاس ProjectTester
+
     def run_comparison(self):
-        """Compare all implemented agent types"""
+        """تمام انواع عامل‌ها را مقایسه کرده و نتایج را در فایل CSV ذخیره می‌کند."""
         print("AGENT COMPARISON")
         print("=" * 50)
 
-        for agent_name, agent_class in self.agent_types.items():
-            print(f"\nTesting {agent_name}...")
-            try:
-                result = self.test_single_agent(agent_class)
-                print(f"✓ {agent_name} completed successfully")
-            except Exception as e:
-                print(f"✗ {agent_name} failed: {str(e)}")
+        all_results = []  # لیستی برای نگهداری تمام نتایج
+
+        # اجرای آزمایش برای هر نوع عامل و هر سناریو
+        for config in self.experiment_configs:
+            for agent_name, agent_class in self.agent_types.items():
+                # شما باید یک تابع آزمایشی کامل‌تر بنویسید که هر trial را جداگانه اجرا کند
+                # اما برای شروع، می‌توانیم از همین ساختار استفاده کنیم.
+                print(f"\nTesting {agent_name} in {config.name}...")
+                try:
+                    # فرض می‌کنیم test_single_agent متریک‌های نهایی را برمی‌گرداند
+                    final_metrics = self.test_single_agent(agent_class, config.name)
+
+                    # اضافه کردن نتایج به لیست
+                    result_data = {
+                        "config_name": config.name,
+                        "agent_type": agent_name,
+                        "tasks_completed": final_metrics['total_resources_collected'],
+                        "total_steps": final_metrics['time_step'],
+                        "average_energy_remaining": final_metrics['average_energy']
+                    }
+                    all_results.append(result_data)
+
+                    print(f"✓ {agent_name} in {config.name} completed successfully")
+                except Exception as e:
+                    print(f"✗ {agent_name} in {config.name} failed: {str(e)}")
+
+        # ذخیره نتایج در فایل CSV
+        if all_results:
+            output_file = "experimental_results.csv"
+            print(f"\nSaving results to {output_file}...")
+            with open(output_file, 'w', newline='') as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=all_results[0].keys())
+                writer.writeheader()
+                writer.writerows(all_results)
+            print("✓ Results saved.")
+
+        return all_results
+
+    # def run_comparison(self):
+    #     """Compare all implemented agent types"""
+    #     print("AGENT COMPARISON")
+    #     print("=" * 50)
+    #
+    #     for agent_name, agent_class in self.agent_types.items():
+    #         print(f"\nTesting {agent_name}...")
+    #         try:
+    #             result = self.test_single_agent(agent_class)
+    #             print(f"✓ {agent_name} completed successfully")
+    #         except Exception as e:
+    #             print(f"✗ {agent_name} failed: {str(e)}")
+
+
 
 
 # ============================================================================
