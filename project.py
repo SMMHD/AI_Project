@@ -120,9 +120,11 @@ class Perception:
 # Environment implementation provided - students use this as-is
 # فایل: final_project.py (جایگزین کلاس GridWorld)
 
+
 class GridWorld:
     """
     کلاس محیط که با ساختار داده‌های رسمی اسکلت هماهنگ شده است.
+    این نسخه برای ثبت زمان تکمیل وظایف به‌روزرسانی شده است.
     """
 
     def __init__(self, width: int, height: int, perception_range: int = 2):
@@ -136,14 +138,13 @@ class GridWorld:
         self.agents: Dict[int, 'Agent'] = {}
         self.agent_positions: Dict[int, Position] = {}
 
-        # برای سادگی، این‌ها را مستقیم در کلاس Agent مدیریت می‌کنیم
-        # self.agent_energy: Dict[int, float] = {}
-        # self.agent_resources: Dict[int, int] = {}
-
         # برای ثبت نتایج آزمایش
         self.initial_resource_count = 0
         self.tasks_completed = 0
         self.total_energy_consumed = 0
+
+        # [تغییر ۱] - یک لیست جدید برای ثبت زمان تحویل هر منبع اضافه شده است
+        self.task_completion_times: List[int] = []
 
     def add_walls(self, wall_positions: List[Position]):
         for pos in wall_positions:
@@ -182,17 +183,13 @@ class GridWorld:
         agent_pos = self.agent_positions[agent_id]
         visible_cells: Dict[Position, CellType] = {}
 
-        # محدوده دید 5x5 است (range=2)
         for y_offset in range(-self.perception_range, self.perception_range + 1):
             for x_offset in range(-self.perception_range, self.perception_range + 1):
                 pos = Position(agent_pos.x + x_offset, agent_pos.y + y_offset)
-
                 if not self.is_valid_position(pos):
                     visible_cells[pos] = CellType.WALL
                 else:
-                    # اگر عامل دیگری در آن خانه بود
                     if pos in self.agent_positions.values() and pos != agent_pos:
-                        # در این نسخه ساده، عامل دیگر را به عنوان دیوار می‌بینیم
                         visible_cells[pos] = CellType.WALL
                     else:
                         visible_cells[pos] = self.grid.get(pos, CellType.EMPTY)
@@ -201,17 +198,15 @@ class GridWorld:
         return Perception(
             position=agent_pos,
             visible_cells=visible_cells,
-            visible_agents={},  # برای سادگی فعلا خالی
-            energy_level=agent.total_rewards,  # فرض می‌کنیم پاداش همان انرژی است
+            visible_agents={},
+            energy_level=agent.total_rewards,
             has_resource=(agent.action_history.count(Action.PICKUP) > agent.action_history.count(Action.DROP)),
-            messages=[]  # برای سادگی فعلا خالی
+            messages=[]
         )
 
     def execute_action(self, agent_id: int, action: Action, message_content: str = ""):
         agent = self.agents[agent_id]
         current_pos = self.agent_positions[agent_id]
-
-        # کسر انرژی برای هر اقدام
         agent.total_rewards -= 1
 
         if action.name.startswith("MOVE"):
@@ -222,41 +217,187 @@ class GridWorld:
 
         elif action == Action.PICKUP:
             if self.grid.get(current_pos) == CellType.RESOURCE:
-                agent.action_history.append(Action.PICKUP)  # برای ردیابی وضعیت حمل
-                self.grid[current_pos] = CellType.EMPTY  # منبع حذف می‌شود
+                agent.action_history.append(Action.PICKUP)
+                self.grid[current_pos] = CellType.EMPTY
 
         elif action == Action.DROP:
             if (agent.action_history.count(Action.PICKUP) > agent.action_history.count(Action.DROP)):
                 agent.action_history.append(Action.DROP)
                 if self.grid.get(current_pos) == CellType.GOAL:
                     self.tasks_completed += 1
+                    # [تغییر ۲] - زمان فعلی (شماره گام) در لیست ثبت می‌شود
+                    self.task_completion_times.append(self.time_step)
                     print(f"Agent {agent_id} delivered a resource at {current_pos}!")
                 else:
-                    self.grid[current_pos] = CellType.RESOURCE  # منبع روی زمین می‌افتد
+                    self.grid[current_pos] = CellType.RESOURCE
 
         elif action == Action.WAIT:
-            agent.total_rewards += 0.5  # انرژی کمتری مصرف می‌شود
+            agent.total_rewards += 0.5
 
     def step(self):
-        """یک گام کامل شبیه‌سازی را برای همه عامل‌ها اجرا می‌کند."""
         self.time_step += 1
         for agent_id, agent in self.agents.items():
             if agent.total_rewards <= 0: continue
-
             perception = self.get_perception(agent_id)
             action, reason = agent.decide_action(perception)
             self.execute_action(agent_id, action)
-            print(
-                f"Step {self.time_step}: Agent {agent_id} at {self.agent_positions[agent_id]} chose {action.name} ({reason})")
+            # این print برای خلاصه شدن خروجی می‌تواند حذف یا کامنت شود
+            # print(f"Step {self.time_step}: Agent {agent_id} at {self.agent_positions[agent_id]} chose {action.name} ({reason})")
 
     def get_performance_metrics(self) -> Dict:
-        """محاسبه و بازگرداندن متریک‌های عملکرد."""
-        # این یک پیاده‌سازی ساده برای هماهنگی با تستر است
+        """
+        متریک‌های عملکرد را محاسبه کرده و برمی‌گرداند.
+        زمان تکمیل وظیفه نیز به خروجی اضافه شده است.
+        """
+        # [تغییر ۳] - محاسبه زمان تکمیل آخرین وظیفه
+        # اگر هیچ وظیفه‌ای انجام نشده باشد، مقدار صفر را برمی‌گرداند
+        final_task_completion_time = max(self.task_completion_times) if self.task_completion_times else 0
+
         return {
             'total_resources_collected': self.tasks_completed,
             'time_step': self.time_step,
-            'average_energy': np.mean([a.total_rewards for a in self.agents.values()]) if self.agents else 0
+            'average_energy': np.mean([a.total_rewards for a in self.agents.values()]) if self.agents else 0,
+            'task_completion_time': final_task_completion_time,
         }
+
+
+# class GridWorld:
+#     """
+#     کلاس محیط که با ساختار داده‌های رسمی اسکلت هماهنگ شده است.
+#     """
+#
+#     def __init__(self, width: int, height: int, perception_range: int = 2):
+#         self.width = width
+#         self.height = height
+#         self.perception_range = perception_range
+#         self.time_step = 0
+#
+#         # وضعیت محیط
+#         self.grid: Dict[Position, CellType] = defaultdict(lambda: CellType.EMPTY)
+#         self.agents: Dict[int, 'Agent'] = {}
+#         self.agent_positions: Dict[int, Position] = {}
+#
+#         # برای سادگی، این‌ها را مستقیم در کلاس Agent مدیریت می‌کنیم
+#         # self.agent_energy: Dict[int, float] = {}
+#         # self.agent_resources: Dict[int, int] = {}
+#
+#         # برای ثبت نتایج آزمایش
+#         self.initial_resource_count = 0
+#         self.tasks_completed = 0
+#         self.total_energy_consumed = 0
+#
+#     def add_walls(self, wall_positions: List[Position]):
+#         for pos in wall_positions:
+#             if self.is_valid_position(pos): self.grid[pos] = CellType.WALL
+#
+#     def add_goals(self, goal_positions: List[Position]):
+#         for pos in goal_positions:
+#             if self.is_valid_position(pos): self.grid[pos] = CellType.GOAL
+#
+#     def add_resources(self, resource_positions: List[Position]):
+#         for pos in resource_positions:
+#             if self.is_valid_position(pos): self.grid[pos] = CellType.RESOURCE
+#         self.initial_resource_count = len(resource_positions)
+#
+#     def add_hazards(self, hazard_positions: List[Position]):
+#         for pos in hazard_positions:
+#             if self.is_valid_position(pos): self.grid[pos] = CellType.HAZARD
+#
+#     def add_agent(self, agent: 'Agent', position: Position) -> bool:
+#         if self.is_position_free(position):
+#             agent_id = len(self.agents) + 1
+#             agent.agent_id = agent_id
+#             self.agents[agent_id] = agent
+#             self.agent_positions[agent_id] = position
+#             return True
+#         return False
+#
+#     def is_valid_position(self, pos: Position) -> bool:
+#         return 0 <= pos.x < self.width and 0 <= pos.y < self.height
+#
+#     def is_position_free(self, pos: Position) -> bool:
+#         return self.is_valid_position(pos) and self.grid.get(
+#             pos) != CellType.WALL and pos not in self.agent_positions.values()
+#
+#     def get_perception(self, agent_id: int) -> Perception:
+#         agent_pos = self.agent_positions[agent_id]
+#         visible_cells: Dict[Position, CellType] = {}
+#
+#         # محدوده دید 5x5 است (range=2)
+#         for y_offset in range(-self.perception_range, self.perception_range + 1):
+#             for x_offset in range(-self.perception_range, self.perception_range + 1):
+#                 pos = Position(agent_pos.x + x_offset, agent_pos.y + y_offset)
+#
+#                 if not self.is_valid_position(pos):
+#                     visible_cells[pos] = CellType.WALL
+#                 else:
+#                     # اگر عامل دیگری در آن خانه بود
+#                     if pos in self.agent_positions.values() and pos != agent_pos:
+#                         # در این نسخه ساده، عامل دیگر را به عنوان دیوار می‌بینیم
+#                         visible_cells[pos] = CellType.WALL
+#                     else:
+#                         visible_cells[pos] = self.grid.get(pos, CellType.EMPTY)
+#
+#         agent = self.agents[agent_id]
+#         return Perception(
+#             position=agent_pos,
+#             visible_cells=visible_cells,
+#             visible_agents={},  # برای سادگی فعلا خالی
+#             energy_level=agent.total_rewards,  # فرض می‌کنیم پاداش همان انرژی است
+#             has_resource=(agent.action_history.count(Action.PICKUP) > agent.action_history.count(Action.DROP)),
+#             messages=[]  # برای سادگی فعلا خالی
+#         )
+#
+#     def execute_action(self, agent_id: int, action: Action, message_content: str = ""):
+#         agent = self.agents[agent_id]
+#         current_pos = self.agent_positions[agent_id]
+#
+#         # کسر انرژی برای هر اقدام
+#         agent.total_rewards -= 1
+#
+#         if action.name.startswith("MOVE"):
+#             direction = Direction[action.name.replace("MOVE_", "")]
+#             next_pos = current_pos + direction
+#             if self.is_position_free(next_pos):
+#                 self.agent_positions[agent_id] = next_pos
+#
+#         elif action == Action.PICKUP:
+#             if self.grid.get(current_pos) == CellType.RESOURCE:
+#                 agent.action_history.append(Action.PICKUP)  # برای ردیابی وضعیت حمل
+#                 self.grid[current_pos] = CellType.EMPTY  # منبع حذف می‌شود
+#
+#         elif action == Action.DROP:
+#             if (agent.action_history.count(Action.PICKUP) > agent.action_history.count(Action.DROP)):
+#                 agent.action_history.append(Action.DROP)
+#                 if self.grid.get(current_pos) == CellType.GOAL:
+#                     self.tasks_completed += 1
+#                     print(f"Agent {agent_id} delivered a resource at {current_pos}!")
+#                 else:
+#                     self.grid[current_pos] = CellType.RESOURCE  # منبع روی زمین می‌افتد
+#
+#         elif action == Action.WAIT:
+#             agent.total_rewards += 0.5  # انرژی کمتری مصرف می‌شود
+#
+#     def step(self):
+#         """یک گام کامل شبیه‌سازی را برای همه عامل‌ها اجرا می‌کند."""
+#         self.time_step += 1
+#         for agent_id, agent in self.agents.items():
+#             if agent.total_rewards <= 0: continue
+#
+#             perception = self.get_perception(agent_id)
+#             action, reason = agent.decide_action(perception)
+#             self.execute_action(agent_id, action)
+#             print(
+#                 f"Step {self.time_step}: Agent {agent_id} at {self.agent_positions[agent_id]} chose {action.name} ({reason})")
+#
+#     def get_performance_metrics(self) -> Dict:
+#         """محاسبه و بازگرداندن متریک‌های عملکرد."""
+#         # این یک پیاده‌سازی ساده برای هماهنگی با تستر است
+#         return {
+#             'total_resources_collected': self.tasks_completed,
+#             'time_step': self.time_step,
+#             'average_energy': np.mean([a.total_rewards for a in self.agents.values()]) if self.agents else 0
+#         }
 
 
 # ============================================================================
@@ -1030,10 +1171,10 @@ class ProjectTester:
 
         return final_metrics
 
-    # در کلاس ProjectTester
+    # این متد را در کلاس ProjectTester جایگزین کنید
 
     def run_comparison(self):
-        """تمام انواع عامل‌ها را مقایسه کرده و نتایج را در فایل CSV ذخیره می‌کند."""
+        """تمام انواع عامل‌ها را مقایسه کرده و نتایج کامل را در فایل CSV ذخیره می‌کند."""
         print("AGENT COMPARISON")
         print("=" * 50)
 
@@ -1042,31 +1183,24 @@ class ProjectTester:
         # اجرای آزمایش برای هر نوع عامل و هر سناریو
         for config in self.experiment_configs:
             for agent_name, agent_class in self.agent_types.items():
-                # شما باید یک تابع آزمایشی کامل‌تر بنویسید که هر trial را جداگانه اجرا کند
-                # اما برای شروع، می‌توانیم از همین ساختار استفاده کنیم.
                 print(f"\nTesting {agent_name} in {config.name}...")
                 try:
-                    # فرض می‌کنیم test_single_agent متریک‌های نهایی را برمی‌گرداند
-                    final_metrics = self.test_single_agent(agent_class, config.name)
+                    # [تغییر ۱] - چون کد تست پیچیده‌تر می‌شود، آن را به یک متد جدا منتقل می‌کنیم
+                    # این متد باید میانگین نتایج چندین اجرا را برگرداند
+                    final_metrics = self.run_single_experiment(agent_class, config)
 
                     # اضافه کردن نتایج به لیست
-                    result_data = {
-                        "config_name": config.name,
-                        "agent_type": agent_name,
-                        "tasks_completed": final_metrics['total_resources_collected'],
-                        "total_steps": final_metrics['time_step'],
-                        "average_energy_remaining": final_metrics['average_energy']
-                    }
-                    all_results.append(result_data)
+                    all_results.append(final_metrics)
 
                     print(f"✓ {agent_name} in {config.name} completed successfully")
                 except Exception as e:
-                    print(f"✗ {agent_name} in {config.name} failed: {str(e)}")
+                    print(f"✗ {agent_name} in {config.name} failed: {e}")
 
         # ذخیره نتایج در فایل CSV
         if all_results:
             output_file = "experimental_results.csv"
             print(f"\nSaving results to {output_file}...")
+            # استفاده از DictWriter برای نوشتن هدر و ردیف‌ها به صورت خودکار
             with open(output_file, 'w', newline='') as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=all_results[0].keys())
                 writer.writeheader()
@@ -1074,6 +1208,100 @@ class ProjectTester:
             print("✓ Results saved.")
 
         return all_results
+
+    # [تغییر ۲] - یک متد جدید برای اجرای کامل یک آزمایش (با چند بار تکرار) اضافه می‌کنیم
+    def run_single_experiment(self, agent_class, config: ExperimentConfig) -> Dict:
+        """یک آزمایش کامل را برای یک عامل و یک سناریو با چندین بار تکرار اجرا می‌کند."""
+
+        # لیست‌هایی برای نگهداری نتایج هر بار اجرا
+        completion_times = []
+        tasks_completed_list = []
+
+        # طبق PDF، حداقل ۵ بار آزمایش را تکرار می‌کنیم
+        for i in range(config.num_trials):
+            # ساخت محیط جدید برای هر بار اجرا
+            env = GridWorld(config.grid_size[0], config.grid_size[1])
+            # ... اینجا باید کد مربوط به اضافه کردن دیوارها، منابع و ... را بر اساس config قرار دهید ...
+            # برای سادگی فعلا از همان مقادیر ثابت استفاده می‌کنیم
+            walls = [Position(x, 0) for x in range(env.width)] + [Position(x, env.height - 1) for x in range(env.width)]
+            walls += [Position(0, y) for y in range(env.height)] + [Position(env.width - 1, y) for y in
+                                                                    range(env.height)]
+            env.add_walls(walls)
+
+            resources = [Position(3, 3), Position(5, 5)]
+            goals = [Position(2, 2), Position(6, 6)]
+            env.add_resources(resources)
+            env.add_goals(goals)
+
+            agent = agent_class(f"{agent_class.__name__}_trial_{i}")
+            env.add_agent(agent, Position(1, 1))
+
+            # اجرای شبیه‌سازی
+            for _ in range(config.max_steps):
+                env.step()
+
+            metrics = env.get_performance_metrics()
+            # ثبت نتایج این اجرا
+            completion_times.append(metrics['task_completion_time'])
+            tasks_completed_list.append(metrics['total_resources_collected'])
+
+        # محاسبه میانگین نتایج پس از تمام اجراها
+        avg_completion_time = np.mean([t for t in completion_times if t > 0]) if any(
+            t > 0 for t in completion_times) else 0
+
+        return {
+            "config_name": config.name,
+            "agent_type": agent_class.__name__,
+            "avg_tasks_completed": np.mean(tasks_completed_list),
+            "avg_completion_time": avg_completion_time,
+            "num_trials": config.num_trials
+        }
+
+
+
+
+    # def run_comparison(self):
+    #     """تمام انواع عامل‌ها را مقایسه کرده و نتایج را در فایل CSV ذخیره می‌کند."""
+    #     print("AGENT COMPARISON")
+    #     print("=" * 50)
+    #
+    #     all_results = []  # لیستی برای نگهداری تمام نتایج
+    #
+    #     # اجرای آزمایش برای هر نوع عامل و هر سناریو
+    #     for config in self.experiment_configs:
+    #         for agent_name, agent_class in self.agent_types.items():
+    #             # شما باید یک تابع آزمایشی کامل‌تر بنویسید که هر trial را جداگانه اجرا کند
+    #             # اما برای شروع، می‌توانیم از همین ساختار استفاده کنیم.
+    #             print(f"\nTesting {agent_name} in {config.name}...")
+    #             try:
+    #                 # فرض می‌کنیم test_single_agent متریک‌های نهایی را برمی‌گرداند
+    #                 final_metrics = self.test_single_agent(agent_class, config.name)
+    #
+    #                 # اضافه کردن نتایج به لیست
+    #                 result_data = {
+    #                     "config_name": config.name,
+    #                     "agent_type": agent_name,
+    #                     "tasks_completed": final_metrics['total_resources_collected'],
+    #                     "total_steps": final_metrics['time_step'],
+    #                     "average_energy_remaining": final_metrics['average_energy']
+    #                 }
+    #                 all_results.append(result_data)
+    #
+    #                 print(f"✓ {agent_name} in {config.name} completed successfully")
+    #             except Exception as e:
+    #                 print(f"✗ {agent_name} in {config.name} failed: {str(e)}")
+    #
+    #     # ذخیره نتایج در فایل CSV
+    #     if all_results:
+    #         output_file = "experimental_results.csv"
+    #         print(f"\nSaving results to {output_file}...")
+    #         with open(output_file, 'w', newline='') as csvfile:
+    #             writer = csv.DictWriter(csvfile, fieldnames=all_results[0].keys())
+    #             writer.writeheader()
+    #             writer.writerows(all_results)
+    #         print("✓ Results saved.")
+    #
+    #     return all_results
 
     # def run_comparison(self):
     #     """Compare all implemented agent types"""
