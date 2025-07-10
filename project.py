@@ -960,7 +960,7 @@ class ProjectTester:
                 num_resources=4,
                 num_goals=2,
                 num_hazards=0,
-                max_steps=100,
+                max_steps=200,
                 num_trials=5
             ),
             ExperimentConfig(
@@ -971,7 +971,7 @@ class ProjectTester:
                 num_resources=4,
                 num_goals=2,
                 num_hazards=3,
-                max_steps=150,
+                max_steps=300,
                 num_trials=5
             ),
             ExperimentConfig(
@@ -982,7 +982,7 @@ class ProjectTester:
                 num_resources=3,
                 num_goals=2,
                 num_hazards=2,
-                max_steps=200,
+                max_steps=400,
                 num_trials=5
             )
         ]
